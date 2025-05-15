@@ -1,0 +1,22 @@
+{"properties": [
+  {
+    "name": "geoserver.url",
+    "type": "java.lang.String",
+    "description": "GeoServer URL"
+  },
+  {
+    "name": "geoserver.workspace",
+    "type": "java.lang.String",
+    "description": "GeoServer workspace"
+  },
+  {
+    "name": "geoserver.username",
+    "type": "java.lang.String",
+    "description": "GeoServer username"
+  },
+  {
+    "name": "geoserver.password",
+    "type": "java.lang.String",
+    "description": "GeoServer password"
+  }
+]}
