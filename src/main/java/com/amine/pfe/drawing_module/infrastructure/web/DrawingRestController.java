@@ -24,12 +24,13 @@ public class DrawingRestController {
 
     private final DrawingWebPort drawingWebPort;
 
-    @GetMapping("/{layerId}/schema")
+    @GetMapping(value = "/{layerId}/schema")
     public LayerSchema getLayerSchema(@PathVariable UUID layerId) {
         return drawingWebPort.getLayerSchema(layerId);
     }
 
-    @PutMapping("/{layerId}/{featureId}/update")
+    @PutMapping(value = "/{layerId}/{featureId}/update", consumes = "application/json; charset=UTF-8",
+                                                            produces = "application/json; charset=UTF-8")
     public ResponseEntity<FeatureUpdateResult> updateFeature(
             @PathVariable UUID layerId,
             @PathVariable String featureId,

@@ -8,7 +8,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
@@ -37,8 +36,8 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
-import com.amine.pfe.drawing_module.domain.dto.FeatureGeometry;
 import com.amine.pfe.drawing_module.domain.model.Feature;
+import com.amine.pfe.drawing_module.domain.model.FeatureGeometry;
 import com.amine.pfe.drawing_module.domain.model.LayerCatalog;
 import com.amine.pfe.drawing_module.domain.model.LayerSchema;
 import com.amine.pfe.drawing_module.domain.port.out.CartographicServerPort;
@@ -147,9 +146,9 @@ public class GeoserverAdapter implements CartographicServerPort {
                 if (isIgnoredField(name))
                     continue;
 
-                attributes.add(new LayerSchema.Attribute(
-                        labelize(name),
-                        MappingUtils.mapXSDTypeToInputType(type)));
+                String inputType = MappingUtils.mapXSDTypeToInputType(type);
+                String javaType = MappingUtils.mapXSDTypeToJavaType(type);
+                attributes.add(new LayerSchema.Attribute(name, inputType, javaType));
             }
 
             if (geometryType == null) {
@@ -166,12 +165,6 @@ public class GeoserverAdapter implements CartographicServerPort {
         return List.of("fid", "id", "gid").contains(fieldName.toLowerCase());
     }
 
-    private String labelize(String fieldName) {
-        return Arrays.stream(fieldName.split("_"))
-                .map(part -> Character.toUpperCase(part.charAt(0)) + part.substring(1))
-                .collect(Collectors.joining(" "));
-    }
-
     @Override
     public boolean updateFeature(LayerCatalog layerCatalog, Feature feature) {
         try {
@@ -186,10 +179,14 @@ public class GeoserverAdapter implements CartographicServerPort {
             String auth = username + ":" + password;
             String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
             headers.set("Authorization", "Basic " + encodedAuth);
-            headers.setContentType(MediaType.APPLICATION_XML);
+            headers.setContentType(new MediaType("application", "xml", StandardCharsets.UTF_8));
             headers.set("Accept", "application/xml");
+            headers.set("Accept-Charset", "UTF-8");
 
-            HttpEntity<String> request = new HttpEntity<>(wfsTransaction, headers);
+
+            HttpEntity<String> request = new HttpEntity<>(
+                    new String(wfsTransaction.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
+                    headers);
 
             // Exécuter la requête
             ResponseEntity<String> response = restTemplate.exchange(
@@ -225,7 +222,6 @@ public class GeoserverAdapter implements CartographicServerPort {
 
         // Construire les propriétés à mettre à jour
         String propertyUpdates = feature.getProperties().entrySet().stream()
-                .filter(entry -> !isEmptyValue(entry.getValue()))
                 .map(entry -> String.format(
                         "<wfs:Property><wfs:Name>%s</wfs:Name><wfs:Value>%s</wfs:Value></wfs:Property>",
                         entry.getKey(),
@@ -257,72 +253,44 @@ public class GeoserverAdapter implements CartographicServerPort {
                 feature.getId());
     }
 
-    /**
-     * Vérifie si une valeur est considérée comme vide
-     * 
-     * @param value la valeur à vérifier
-     * @return true si la valeur est vide, false sinon
-     */
-    private boolean isEmptyValue(Object value) {
-        if (value == null) {
-            return true;
-        }
-
-        String stringValue = String.valueOf(value).trim();
-
-        // Considérer comme vide si :
-        // - chaîne vide
-        // - chaîne "null" (au cas où)
-        // - chaîne "undefined" (au cas où)
-        return stringValue.isEmpty() ||
-                "null".equalsIgnoreCase(stringValue) ||
-                "undefined".equalsIgnoreCase(stringValue);
-    }
-
-    private String convertGeometryToGml(FeatureGeometry geometry) {
+    public String convertGeometryToGml(FeatureGeometry geometry) {
         switch (geometry.getType().toLowerCase()) {
             case "point":
-                return buildPointGml(geometry.getCoordinates());
+                return convertPointToGml(geometry.getCoordinates());
+
             case "linestring":
-                return buildLineStringGml(geometry.getCoordinates());
+                return convertLineStringToGml(geometry.getCoordinates());
+
+            case "multilinestring":
+                return convertMultiLineStringToGml(geometry.getCoordinates());
+
             case "polygon":
-                return buildPolygonGml(geometry.getCoordinates());
+                return convertPolygonToGml(geometry.getCoordinates());
+
+            case "multipolygon":
+                return convertMultiPolygonToGml(geometry.getCoordinates());
+
             default:
-                throw new IllegalArgumentException("Type de géométrie non supporté: " + geometry.getType());
+                throw new IllegalArgumentException("Type géométrie non supporté: " + geometry.getType());
         }
     }
 
-    private String buildPointGml(Object coordinates) {
-        double[] coords = extractCoordinates(coordinates);
-        if (coords.length < 2) {
-            throw new IllegalArgumentException("Point doit avoir au moins 2 coordonnées");
-        }
-
-        // Utiliser le format GML 3.1.1 avec srsDimension explicite et locale US pour
-        // les points décimaux
+    private String convertPointToGml(double[] coordinates) {
         return String.format(Locale.US,
                 "<gml:Point srsName=\"EPSG:3857\" srsDimension=\"2\">" +
                         "<gml:pos>%.6f %.6f</gml:pos>" +
                         "</gml:Point>",
-                coords[0], coords[1]);
+                coordinates[0], coordinates[1]);
     }
 
-    private String buildLineStringGml(Object coordinates) {
-        if (!(coordinates instanceof Object[])) {
-            throw new IllegalArgumentException("LineString coordinates doit être un tableau");
-        }
-
-        Object[] coordsArray = (Object[]) coordinates;
+    private String convertLineStringToGml(double[] coordinates) {
         StringBuilder coordsBuilder = new StringBuilder();
 
-        for (int i = 0; i < coordsArray.length; i++) {
-            double[] point = extractCoordinates(coordsArray[i]);
-            if (point.length < 2)
-                continue;
-
+        for (int i = 0; i < coordinates.length; i += 2) {
             if (i > 0)
                 coordsBuilder.append(" ");
-            coordsBuilder.append(String.format(Locale.US, "%.6f %.6f", point[0], point[1]));
+            coordsBuilder.append(String.format(Locale.US, "%.6f %.6f",
+                    coordinates[i], coordinates[i + 1]));
         }
 
         return String.format(
@@ -332,148 +300,164 @@ public class GeoserverAdapter implements CartographicServerPort {
                 coordsBuilder.toString());
     }
 
-    private String buildPolygonGml(Object coordinates) {
-        if (!(coordinates instanceof Object[])) {
-            throw new IllegalArgumentException("Polygon coordinates doit être un tableau");
+    private String convertMultiLineStringToGml(double[] coordinates) {
+        StringBuilder multiLineBuilder = new StringBuilder();
+        multiLineBuilder.append("<gml:MultiLineString srsName=\"EPSG:3857\">");
+
+        StringBuilder currentLine = new StringBuilder();
+
+        for (int i = 0; i < coordinates.length; i += 2) {
+            if (Double.isNaN(coordinates[i])) {
+                // Fin d'une LineString
+                if (currentLine.length() > 0) {
+                    multiLineBuilder.append("<gml:lineStringMember>");
+                    multiLineBuilder.append("<gml:LineString srsDimension=\"2\">");
+                    multiLineBuilder.append("<gml:posList>").append(currentLine.toString()).append("</gml:posList>");
+                    multiLineBuilder.append("</gml:LineString>");
+                    multiLineBuilder.append("</gml:lineStringMember>");
+                    currentLine = new StringBuilder();
+                }
+            } else {
+                if (currentLine.length() > 0)
+                    currentLine.append(" ");
+                currentLine.append(String.format(Locale.US, "%.6f %.6f",
+                        coordinates[i], coordinates[i + 1]));
+            }
         }
 
-        Object[] rings = (Object[]) coordinates;
-        if (rings.length == 0) {
-            throw new IllegalArgumentException("Polygon doit avoir au moins un ring");
-        }
+        multiLineBuilder.append("</gml:MultiLineString>");
+        return multiLineBuilder.toString();
+    }
 
+    private String convertPolygonToGml(double[] coordinates) {
         StringBuilder polygonBuilder = new StringBuilder();
         polygonBuilder.append("<gml:Polygon srsName=\"EPSG:3857\" srsDimension=\"2\">");
 
-        // Premier ring = exterior
-        Object[] exteriorRing = (Object[]) rings[0];
-        StringBuilder exteriorCoords = new StringBuilder();
+        StringBuilder currentRing = new StringBuilder();
+        boolean isFirstRing = true;
 
-        for (int i = 0; i < exteriorRing.length; i++) {
-            double[] point = extractCoordinates(exteriorRing[i]);
-            if (point.length < 2)
-                continue;
-
-            if (i > 0)
-                exteriorCoords.append(" ");
-            exteriorCoords.append(String.format(Locale.US, "%.6f %.6f", point[0], point[1]));
-        }
-
-        polygonBuilder.append("<gml:exterior><gml:LinearRing>");
-        polygonBuilder.append(String.format("<gml:posList>%s</gml:posList>", exteriorCoords.toString()));
-        polygonBuilder.append("</gml:LinearRing></gml:exterior>");
-
-        // Rings intérieurs (trous)
-        for (int r = 1; r < rings.length; r++) {
-            Object[] interiorRing = (Object[]) rings[r];
-            StringBuilder interiorCoords = new StringBuilder();
-
-            for (int i = 0; i < interiorRing.length; i++) {
-                double[] point = extractCoordinates(interiorRing[i]);
-                if (point.length < 2)
-                    continue;
-
-                if (i > 0)
-                    interiorCoords.append(" ");
-                interiorCoords.append(String.format(Locale.US, "%.6f %.6f", point[0], point[1]));
+        for (int i = 0; i < coordinates.length; i += 2) {
+            if (Double.isNaN(coordinates[i])) {
+                // Fin d'un ring
+                if (currentRing.length() > 0) {
+                    if (isFirstRing) {
+                        polygonBuilder.append("<gml:exterior><gml:LinearRing>");
+                        polygonBuilder.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                        polygonBuilder.append("</gml:LinearRing></gml:exterior>");
+                        isFirstRing = false;
+                    } else {
+                        polygonBuilder.append("<gml:interior><gml:LinearRing>");
+                        polygonBuilder.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                        polygonBuilder.append("</gml:LinearRing></gml:interior>");
+                    }
+                    currentRing = new StringBuilder();
+                }
+            } else {
+                if (currentRing.length() > 0)
+                    currentRing.append(" ");
+                currentRing.append(String.format(Locale.US, "%.6f %.6f",
+                        coordinates[i], coordinates[i + 1]));
             }
-
-            polygonBuilder.append("<gml:interior><gml:LinearRing>");
-            polygonBuilder.append(String.format("<gml:posList>%s</gml:posList>", interiorCoords.toString()));
-            polygonBuilder.append("</gml:LinearRing></gml:interior>");
         }
 
         polygonBuilder.append("</gml:Polygon>");
         return polygonBuilder.toString();
     }
 
-    private double[] extractCoordinates(Object coordinates) {
-        double[] coords = extractCoordinatesOriginal(coordinates);
+    private String convertMultiPolygonToGml(double[] coordinates) {
+        StringBuilder multiPolygonBuilder = new StringBuilder();
+        multiPolygonBuilder.append("<gml:MultiPolygon srsName=\"EPSG:3857\">");
 
-        // Forcer en 2D (X, Y seulement)
-        if (coords.length >= 2) {
-            return new double[] { coords[0], coords[1] };
-        }
+        StringBuilder currentPolygon = new StringBuilder();
+        StringBuilder currentRing = new StringBuilder();
+        boolean isFirstRing = true;
+        boolean polygonStarted = false;
 
-        return coords;
-    }
-
-    private double[] extractCoordinatesOriginal(Object coordinates) {
-        // Cas 1: Object[] (tableau d'objets)
-        if (coordinates instanceof Object[]) {
-            Object[] coordsArray = (Object[]) coordinates;
-            double[] result = new double[coordsArray.length];
-
-            for (int i = 0; i < coordsArray.length; i++) {
-                if (coordsArray[i] instanceof Number) {
-                    result[i] = ((Number) coordsArray[i]).doubleValue();
-                } else if (coordsArray[i] instanceof String) {
-                    try {
-                        result[i] = Double.parseDouble((String) coordsArray[i]);
-                    } catch (NumberFormatException e) {
-                        throw new IllegalArgumentException("Impossible de convertir la coordonnée: " + coordsArray[i]);
+        for (int i = 0; i < coordinates.length; i += 2) {
+            if (Double.isInfinite(coordinates[i])) {
+                // Fin d'un polygon - fermer le ring et le polygon actuels si nécessaire
+                if (currentRing.length() > 0) {
+                    if (isFirstRing) {
+                        currentPolygon.append("<gml:exterior><gml:LinearRing>");
+                        currentPolygon.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                        currentPolygon.append("</gml:LinearRing></gml:exterior>");
+                    } else {
+                        currentPolygon.append("<gml:interior><gml:LinearRing>");
+                        currentPolygon.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                        currentPolygon.append("</gml:LinearRing></gml:interior>");
                     }
-                } else {
-                    throw new IllegalArgumentException("Type de coordonnée non supporté: " + coordsArray[i].getClass());
+                    currentRing = new StringBuilder();
                 }
-            }
-            return result;
-        }
-        // Cas 2: List<Number> (liste de nombres)
-        else if (coordinates instanceof java.util.List) {
-            java.util.List<?> coordsList = (java.util.List<?>) coordinates;
-            double[] result = new double[coordsList.size()];
 
-            for (int i = 0; i < coordsList.size(); i++) {
-                Object coord = coordsList.get(i);
-                if (coord instanceof Number) {
-                    result[i] = ((Number) coord).doubleValue();
-                } else if (coord instanceof String) {
-                    try {
-                        result[i] = Double.parseDouble((String) coord);
-                    } catch (NumberFormatException e) {
-                        throw new IllegalArgumentException("Impossible de convertir la coordonnée: " + coord);
+                if (currentPolygon.length() > 0) {
+                    multiPolygonBuilder.append("<gml:polygonMember>");
+                    multiPolygonBuilder.append(currentPolygon.toString());
+                    multiPolygonBuilder.append("</gml:Polygon>");
+                    multiPolygonBuilder.append("</gml:polygonMember>");
+                }
+
+                // Préparer pour un nouveau polygon
+                currentPolygon = new StringBuilder();
+                currentPolygon.append("<gml:Polygon srsDimension=\"2\">");
+                isFirstRing = true;
+                polygonStarted = true;
+
+            } else if (Double.isNaN(coordinates[i])) {
+                // Fin d'un ring
+                if (currentRing.length() > 0) {
+                    if (!polygonStarted) {
+                        currentPolygon.append("<gml:Polygon srsDimension=\"2\">");
+                        polygonStarted = true;
                     }
-                } else {
-                    throw new IllegalArgumentException(
-                            "Type de coordonnée non supporté dans la liste: " + coord.getClass());
+
+                    if (isFirstRing) {
+                        currentPolygon.append("<gml:exterior><gml:LinearRing>");
+                        currentPolygon.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                        currentPolygon.append("</gml:LinearRing></gml:exterior>");
+                        isFirstRing = false;
+                    } else {
+                        currentPolygon.append("<gml:interior><gml:LinearRing>");
+                        currentPolygon.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                        currentPolygon.append("</gml:LinearRing></gml:interior>");
+                    }
+                    currentRing = new StringBuilder();
                 }
+            } else {
+                // Coordonnées normales
+                if (currentRing.length() > 0)
+                    currentRing.append(" ");
+                currentRing.append(String.format(Locale.US, "%.6f %.6f",
+                        coordinates[i], coordinates[i + 1]));
             }
-            return result;
-        }
-        // Cas 3: String JSON comme "[-59740.77, 5339847.06]"
-        else if (coordinates instanceof String) {
-            String coordStr = (String) coordinates;
-            if (coordStr.startsWith("[") && coordStr.endsWith("]")) {
-                coordStr = coordStr.substring(1, coordStr.length() - 1);
-                String[] parts = coordStr.split(",");
-                double[] result = new double[parts.length];
-                for (int i = 0; i < parts.length; i++) {
-                    result[i] = Double.parseDouble(parts[i].trim());
-                }
-                return result;
-            }
-        }
-        // Cas 4: double[] directement
-        else if (coordinates instanceof double[]) {
-            return (double[]) coordinates;
-        }
-        // Cas 5: float[]
-        else if (coordinates instanceof float[]) {
-            float[] floatArray = (float[]) coordinates;
-            double[] result = new double[floatArray.length];
-            for (int i = 0; i < floatArray.length; i++) {
-                result[i] = floatArray[i];
-            }
-            return result;
         }
 
-        // Debug: afficher le type exact et la valeur
-        System.err.println("Type de coordonnées: " + coordinates.getClass().getName());
-        System.err.println("Valeur: " + coordinates.toString());
+        // Fermer le dernier ring et polygon s'ils existent
+        if (currentRing.length() > 0) {
+            if (!polygonStarted) {
+                currentPolygon.append("<gml:Polygon srsDimension=\"2\">");
+                polygonStarted = true;
+            }
 
-        throw new IllegalArgumentException("Format de coordonnées non reconnu: " + coordinates + " (type: "
-                + coordinates.getClass().getName() + ")");
+            if (isFirstRing) {
+                currentPolygon.append("<gml:exterior><gml:LinearRing>");
+                currentPolygon.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                currentPolygon.append("</gml:LinearRing></gml:exterior>");
+            } else {
+                currentPolygon.append("<gml:interior><gml:LinearRing>");
+                currentPolygon.append("<gml:posList>").append(currentRing.toString()).append("</gml:posList>");
+                currentPolygon.append("</gml:LinearRing></gml:interior>");
+            }
+        }
+
+        if (currentPolygon.length() > 0 && polygonStarted) {
+            multiPolygonBuilder.append("<gml:polygonMember>");
+            multiPolygonBuilder.append(currentPolygon.toString());
+            multiPolygonBuilder.append("</gml:Polygon>");
+            multiPolygonBuilder.append("</gml:polygonMember>");
+        }
+
+        multiPolygonBuilder.append("</gml:MultiPolygon>");
+        return multiPolygonBuilder.toString();
     }
 
     private String escapeXml(String value) {

@@ -6,5 +6,5 @@ public record LayerSchema(
     String geometryType,
     List<Attribute> attributes
 ) {
-    public record Attribute(String label, String type) {}
+    public record Attribute(String label, String type, String javaType) {}
 }
