@@ -12,6 +12,8 @@ import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.xml.XMLConstants;
@@ -166,6 +168,137 @@ public class GeoserverAdapter implements CartographicServerPort {
     }
 
     @Override
+    public String insertFeature(LayerCatalog layerCatalog, Feature feature) {
+        try {
+            log.info("Executing WFS-T Insert for feature in layer {} (GeoServer: {})",
+                    layerCatalog.name(), layerCatalog.geoserverLayerName());
+
+            // Construire la requête WFS-T XML
+            String wfsTransaction = buildWfsInsertTransaction(layerCatalog, feature);
+
+            // Configurer les headers
+            HttpHeaders headers = new HttpHeaders();
+            String auth = username + ":" + password;
+            String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
+            headers.set("Authorization", "Basic " + encodedAuth);
+            headers.setContentType(new MediaType("application", "xml", StandardCharsets.UTF_8));
+            headers.set("Accept", "application/xml");
+            headers.set("Accept-Charset", "UTF-8");
+
+            HttpEntity<String> request = new HttpEntity<>(
+                    new String(wfsTransaction.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
+                    headers);
+
+            // Exécuter la requête
+            ResponseEntity<String> response = restTemplate.exchange(
+                    geoserverUrl + "/wfs",
+                    HttpMethod.POST,
+                    request,
+                    String.class);
+
+            // Analyser la réponse et extraire l'ID de la nouvelle feature
+            String newFeatureId = parseWfsInsertResponse(response.getBody());
+
+            if (newFeatureId != null) {
+                log.info("WFS-T Insert successful for feature in layer {}, new ID: {}",
+                        layerCatalog.name(), newFeatureId);
+            } else {
+                log.error("WFS-T Insert failed for feature in layer {}",
+                        layerCatalog.name());
+                log.debug("WFS Response: {}", response.getBody());
+            }
+
+            return newFeatureId;
+
+        } catch (Exception e) {
+            log.error("Error executing WFS-T Insert for feature in layer {}: {}",
+                    layerCatalog.name(), e.getMessage(), e);
+            return null;
+        }
+    }
+
+    private String buildWfsInsertTransaction(LayerCatalog layerCatalog, Feature feature) {
+        String geometryGml = convertGeometryToGml(feature.getGeometry());
+
+        String propertyElements = feature.getProperties().entrySet().stream()
+                .map(entry -> String.format(
+                        "<%s:%s>%s</%s:%s>",
+                        layerCatalog.workspace(), entry.getKey(),
+                        escapeXml(String.valueOf(entry.getValue())),
+                        layerCatalog.workspace(), entry.getKey()))
+                .collect(Collectors.joining("\n"));
+
+        return String.format("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <wfs:Transaction version="1.1.0" service="WFS"
+                    xmlns:wfs="http://www.opengis.net/wfs"
+                    xmlns:gml="http://www.opengis.net/gml"
+                    xmlns:%1$s="%1$s"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                  <wfs:Insert>
+                    <%1$s:%2$s>
+                      <%1$s:geom>
+                        %3$s
+                      </%1$s:geom>
+                      %4$s
+                    </%1$s:%2$s>
+                  </wfs:Insert>
+                </wfs:Transaction>
+                """,
+                layerCatalog.workspace(),
+                layerCatalog.geoserverLayerName(),
+                geometryGml,
+                propertyElements);
+    }
+
+    private String parseWfsInsertResponse(String xmlResponse) {
+        if (xmlResponse == null) {
+            return null;
+        }
+
+        try {
+            // Vérifier si la transaction a réussi
+            if (xmlResponse.contains("<wfs:totalInserted>1</wfs:totalInserted>") ||
+                    xmlResponse.contains("totalInserted>1</")) {
+
+                // Extraire l'ID de la nouvelle feature
+                // Pattern typique : <wfs:FeatureId fid="layername.123"/>
+                Pattern pattern = Pattern.compile("<wfs:FeatureId fid=\"([^\"]+)\"");
+                Matcher matcher = pattern.matcher(xmlResponse);
+
+                if (matcher.find()) {
+                    String fullId = matcher.group(1);
+                    // Extraire juste la partie ID si nécessaire (ex: "layername.123" -> "123")
+                    String[] parts = fullId.split("\\.");
+                    return parts.length > 1 ? parts[parts.length - 1] : fullId;
+                }
+
+                // Si on ne trouve pas le pattern attendu, chercher d'autres patterns
+                Pattern altPattern = Pattern.compile("fid=\"([^\"]+)\"");
+                Matcher altMatcher = altPattern.matcher(xmlResponse);
+                if (altMatcher.find()) {
+                    return altMatcher.group(1);
+                }
+
+                // Si aucun ID n'est trouvé mais que l'insertion a réussi
+                return "SUCCESS_NO_ID";
+            }
+
+            // Vérifier s'il y a des erreurs
+            if (xmlResponse.contains("<ows:Exception") || xmlResponse.contains("<ServiceException")) {
+                log.error("WFS-T Insert failed with error in response: {}", xmlResponse);
+                return null;
+            }
+
+            return null;
+
+        } catch (Exception e) {
+            log.error("Error parsing WFS Insert response: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
     public boolean updateFeature(LayerCatalog layerCatalog, Feature feature) {
         try {
             log.info("Executing WFS-T Update for feature {} in layer {} (GeoServer: {})",
@@ -183,14 +316,13 @@ public class GeoserverAdapter implements CartographicServerPort {
             headers.set("Accept", "application/xml");
             headers.set("Accept-Charset", "UTF-8");
 
-
             HttpEntity<String> request = new HttpEntity<>(
                     new String(wfsTransaction.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
                     headers);
 
             // Exécuter la requête
             ResponseEntity<String> response = restTemplate.exchange(
-                    geoserverUrl + "/" + "/wfs",
+                    geoserverUrl + "/wfs",
                     HttpMethod.POST,
                     request,
                     String.class);

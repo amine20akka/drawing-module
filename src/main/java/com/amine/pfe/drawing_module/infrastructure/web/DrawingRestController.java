@@ -5,6 +5,7 @@ import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,6 +28,14 @@ public class DrawingRestController {
     @GetMapping(value = "/{layerId}/schema")
     public LayerSchema getLayerSchema(@PathVariable UUID layerId) {
         return drawingWebPort.getLayerSchema(layerId);
+    }
+
+    @PostMapping(value = "/{layerId}/insert", consumes = "application/json; charset=UTF-8",
+                                                            produces = "application/json; charset=UTF-8")
+    public ResponseEntity<FeatureUpdateResult> insertFeature(
+        @PathVariable UUID layerId,
+        @RequestBody FeatureUpdateRequest insertRequest) {
+        return drawingWebPort.insertFeature(layerId, insertRequest);
     }
 
     @PutMapping(value = "/{layerId}/{featureId}/update", consumes = "application/json; charset=UTF-8",
