@@ -7,4 +7,5 @@ import com.amine.pfe.drawing_module.domain.model.LayerSchema;
 public interface CartographicServerPort {
     public LayerSchema getLayerSchema(String workspace, String layerName);
     public boolean updateFeature(LayerCatalog layerCatalog, Feature feature);
+    public String insertFeature(LayerCatalog layerCatalog, Feature feature);
 }

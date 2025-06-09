@@ -1,5 +1,7 @@
 package com.amine.pfe.drawing_module.infrastructure.service;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +46,89 @@ public class LayerManagerAdapter implements LayerManagerPort {
         return cartographicServerPort.getLayerSchema(
                 catalog.workspace(),
                 catalog.geoserverLayerName());
+    }
+
+    @Override
+    public FeatureUpdateResult insertFeature(UUID layerId, FeatureUpdateRequest request) {
+        try {
+            log.info("Creating feature with request {} in layer {}", request, layerId);
+
+            // 1. Récupérer le catalog de la couche
+            LayerCatalog layerCatalog = catalogRepository.findLayerCatalogById(layerId)
+                    .orElse(null);
+
+            if (layerCatalog == null) {
+                return FeatureUpdateResult.builder()
+                        .success(false)
+                        .message("Layer not found: " + layerId)
+                        .build();
+            }
+
+            // 2. Parser la géométrie
+            FeatureGeometry geometry = parseGeometry(request.getGeometry());
+            log.info("Parsed geometry: {}", geometry);
+            if (geometry == null) {
+                return FeatureUpdateResult.builder()
+                        .success(false)
+                        .message("Invalid geometry format")
+                        .build();
+            }
+
+            // 3. Obtenir le schéma directement via GeoServer
+            LayerSchema layerSchema = cartographicServerPort.getLayerSchema(
+                    layerCatalog.workspace(), layerCatalog.geoserverLayerName());
+
+            Map<String, String> attributeTypes = layerSchema.attributes().stream()
+                    .collect(Collectors.toMap(LayerSchema.Attribute::label, LayerSchema.Attribute::javaType));
+
+            // 4. Convertir les propriétés en fonction du type attendu
+            Map<String, Object> properties = new HashMap<>();
+            for (Map.Entry<String, Object> entry : request.getProperties().entrySet()) {
+                String key = entry.getKey();
+                Object rawValue = entry.getValue();
+                String expectedType = attributeTypes.get(key);
+
+                Object convertedValue = MappingUtils.convertValueToExpectedType(rawValue, expectedType);
+                properties.put(key, convertedValue);
+            }
+
+            // Ajouter les métadonnées de création
+            properties.put("date_creation", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+            properties.put("date_modif", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+
+            log.info("Properties for new feature: {}", properties);
+
+            // 5. Créer le feature à insérer
+            Feature feature = Feature.builder()
+                    .geometry(geometry)
+                    .properties(properties)
+                    .build();
+
+            // 6. Exécuter l'ajout via WFS-T
+            String newFeatureId = cartographicServerPort.insertFeature(layerCatalog, feature);
+
+            if (newFeatureId != null) {
+                log.info("Feature created successfully with ID {} in layer {}", newFeatureId, layerCatalog.name());
+                return FeatureUpdateResult.builder()
+                        .success(true)
+                        .featureId(newFeatureId)
+                        .message("Feature created successfully")
+                        .build();
+            } else {
+                log.error("Failed to create feature in layer {}", layerCatalog.name());
+                return FeatureUpdateResult.builder()
+                        .success(false)
+                        .message("WFS-T transaction failed")
+                        .build();
+            }
+
+        } catch (Exception e) {
+            log.error("Error creating feature in layer {}: {}", layerId, e.getMessage(), e);
+            return FeatureUpdateResult.builder()
+                    .success(false)
+                    .message("Internal server error: " + e.getMessage())
+                    .build();
+        }
     }
 
     @Override
@@ -92,7 +177,7 @@ public class LayerManagerAdapter implements LayerManagerPort {
                 updatedProperties.put(key, convertedValue);
             }
 
-            updatedProperties.put("date_modif", java.time.Instant.now().toString());
+            updatedProperties.put("date_modif", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
 
             log.info("Updated properties: {}", updatedProperties);
 
@@ -203,7 +288,7 @@ public class LayerManagerAdapter implements LayerManagerPort {
     }
 
     // ===============================================
-    // 3. MÉTHODES DE PARSING SPÉCIALISÉES
+    // MÉTHODES DE PARSING SPÉCIALISÉES
     // ===============================================
 
     private double[] parsePointCoordinates(JsonNode coordsNode) {

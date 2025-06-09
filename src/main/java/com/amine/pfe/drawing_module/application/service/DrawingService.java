@@ -24,4 +24,8 @@ public class DrawingService {
     public FeatureUpdateResult updateFeature(UUID layerId, String featureId, FeatureUpdateRequest updateRequest) {
         return layerManager.updateFeature(layerId, featureId, updateRequest);
     }
+
+    public FeatureUpdateResult insertFeature(UUID layerId, FeatureUpdateRequest insertRequest) {
+        return layerManager.insertFeature(layerId, insertRequest);
+    }
 }

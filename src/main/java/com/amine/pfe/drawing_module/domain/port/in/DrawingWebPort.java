@@ -11,4 +11,5 @@ import com.amine.pfe.drawing_module.domain.model.LayerSchema;
 public interface DrawingWebPort {
     LayerSchema getLayerSchema(UUID layerId);
     public ResponseEntity<FeatureUpdateResult> updateFeature(UUID layerId, String featureId, FeatureUpdateRequest updateRequest);
+    public ResponseEntity<FeatureUpdateResult> insertFeature(UUID layerId, FeatureUpdateRequest createRequest);
 }
