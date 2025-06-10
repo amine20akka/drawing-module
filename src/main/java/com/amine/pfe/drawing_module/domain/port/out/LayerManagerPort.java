@@ -10,4 +10,5 @@ public interface LayerManagerPort {
     public LayerSchema getLayerSchema(UUID layerId);
     public FeatureUpdateResult updateFeature(UUID layerId, String featureId, FeatureUpdateRequest request);
     public FeatureUpdateResult insertFeature(UUID layerId, FeatureUpdateRequest request);
+    public FeatureUpdateResult deleteFeature(UUID layerId, String featureId);
 }

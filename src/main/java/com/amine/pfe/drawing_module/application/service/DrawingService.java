@@ -28,4 +28,8 @@ public class DrawingService {
     public FeatureUpdateResult insertFeature(UUID layerId, FeatureUpdateRequest insertRequest) {
         return layerManager.insertFeature(layerId, insertRequest);
     }
+
+    public FeatureUpdateResult deleteFeature(UUID layerId, String featureId) {
+        return layerManager.deleteFeature(layerId, featureId);
+    }
 }

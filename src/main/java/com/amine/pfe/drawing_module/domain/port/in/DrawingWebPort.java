@@ -12,4 +12,5 @@ public interface DrawingWebPort {
     LayerSchema getLayerSchema(UUID layerId);
     public ResponseEntity<FeatureUpdateResult> updateFeature(UUID layerId, String featureId, FeatureUpdateRequest updateRequest);
     public ResponseEntity<FeatureUpdateResult> insertFeature(UUID layerId, FeatureUpdateRequest createRequest);
+    public ResponseEntity<FeatureUpdateResult> deleteFeature(UUID layerId, String featureId);
 }

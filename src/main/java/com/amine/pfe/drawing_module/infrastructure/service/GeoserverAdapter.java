@@ -189,7 +189,6 @@ public class GeoserverAdapter implements CartographicServerPort {
                     new String(wfsTransaction.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
                     headers);
 
-            // Exécuter la requête
             ResponseEntity<String> response = restTemplate.exchange(
                     geoserverUrl + "/wfs",
                     HttpMethod.POST,
@@ -328,7 +327,7 @@ public class GeoserverAdapter implements CartographicServerPort {
                     String.class);
 
             // Analyser la réponse
-            boolean success = parseWfsResponse(response.getBody());
+            boolean success = parseWfsUpdateResponse(response.getBody());
 
             if (success) {
                 log.info("WFS-T Update successful for feature {} in layer {}",
@@ -602,7 +601,7 @@ public class GeoserverAdapter implements CartographicServerPort {
                 .replace("'", "&apos;");
     }
 
-    private boolean parseWfsResponse(String xmlResponse) {
+    private boolean parseWfsUpdateResponse(String xmlResponse) {
         if (xmlResponse == null)
             return false;
 
@@ -611,5 +610,109 @@ public class GeoserverAdapter implements CartographicServerPort {
                 xmlResponse.contains("totalUpdated>1</") ||
                 (!xmlResponse.contains("<ows:Exception") &&
                         !xmlResponse.contains("<ServiceException"));
+    }
+
+    @Override
+    public boolean deleteFeature(LayerCatalog layerCatalog, String featureId) {
+        try {
+            log.info("Executing WFS-T Delete for feature {} in layer {} (GeoServer: {})",
+                    featureId, layerCatalog.name(), layerCatalog.geoserverLayerName());
+
+            // Construire la requête WFS-T XML pour la suppression
+            String wfsTransaction = buildWfsDeleteTransaction(layerCatalog, featureId);
+
+            // Configurer les headers
+            HttpHeaders headers = new HttpHeaders();
+            String auth = username + ":" + password;
+            String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
+            headers.set("Authorization", "Basic " + encodedAuth);
+            headers.setContentType(new MediaType("application", "xml", StandardCharsets.UTF_8));
+            headers.set("Accept", "application/xml");
+            headers.set("Accept-Charset", "UTF-8");
+
+            HttpEntity<String> request = new HttpEntity<>(
+                    new String(wfsTransaction.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
+                    headers);
+
+            // Exécuter la requête
+            ResponseEntity<String> response = restTemplate.exchange(
+                    geoserverUrl + "/wfs",
+                    HttpMethod.POST,
+                    request,
+                    String.class);
+
+            // Analyser la réponse
+            boolean success = parseWfsDeleteResponse(response.getBody());
+
+            if (success) {
+                log.info("WFS-T Delete successful for feature {} in layer {}",
+                        featureId, layerCatalog.name());
+            } else {
+                log.error("WFS-T Delete failed for feature {} in layer {}",
+                        featureId, layerCatalog.name());
+                log.debug("WFS Response: {}", response.getBody());
+            }
+
+            return success;
+
+        } catch (Exception e) {
+            log.error("Error executing WFS-T Delete for feature {} in layer {}: {}",
+                    featureId, layerCatalog.name(), e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private String buildWfsDeleteTransaction(LayerCatalog layerCatalog, String featureId) {
+
+        return String.format("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <wfs:Transaction version="1.1.0" service="WFS"
+                    xmlns:wfs="http://www.opengis.net/wfs"
+                    xmlns:ogc="http://www.opengis.net/ogc"
+                    xmlns:%1$s="%1$s"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                  <wfs:Delete typeName="%1$s:%2$s">
+                    <ogc:Filter>
+                      <ogc:FeatureId fid="%3$s"/>
+                    </ogc:Filter>
+                  </wfs:Delete>
+                </wfs:Transaction>
+                """,
+                layerCatalog.workspace(),
+                layerCatalog.geoserverLayerName(),
+                featureId);
+    }
+
+    private boolean parseWfsDeleteResponse(String xmlResponse) {
+        if (xmlResponse == null) {
+            return false;
+        }
+
+        try {
+            // Vérifier si la transaction a réussi
+            if (xmlResponse.contains("<wfs:totalDeleted>1</wfs:totalDeleted>") ||
+                    xmlResponse.contains("totalDeleted>1</")) {
+                return true;
+            }
+
+            // Vérifier s'il y a des erreurs
+            if (xmlResponse.contains("<ows:Exception") || xmlResponse.contains("<ServiceException")) {
+                log.error("WFS-T Delete failed with error in response: {}", xmlResponse);
+                return false;
+            }
+
+            // Si aucune feature n'a été supprimée
+            if (xmlResponse.contains("<wfs:totalDeleted>0</wfs:totalDeleted>") ||
+                    xmlResponse.contains("totalDeleted>0</")) {
+                log.warn("WFS-T Delete: No feature was deleted (feature may not exist)");
+                return false;
+            }
+
+            return false;
+
+        } catch (Exception e) {
+            log.error("Error parsing WFS Delete response: {}", e.getMessage());
+            return false;
+        }
     }
 }

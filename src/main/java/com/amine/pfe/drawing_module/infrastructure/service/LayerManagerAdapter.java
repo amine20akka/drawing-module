@@ -1,6 +1,7 @@
 package com.amine.pfe.drawing_module.infrastructure.service;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -92,9 +93,11 @@ public class LayerManagerAdapter implements LayerManagerPort {
                 properties.put(key, convertedValue);
             }
 
-            // Ajouter les métadonnées de création
-            properties.put("date_creation", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-            properties.put("date_modif", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+            LocalDateTime now = LocalDateTime.now();
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+            String formattedDate = now.atZone(ZoneId.systemDefault()).format(formatter);
+            properties.put("date_creation", formattedDate);
+            properties.put("date_modif", formattedDate);
 
             log.info("Properties for new feature: {}", properties);
 
@@ -177,7 +180,10 @@ public class LayerManagerAdapter implements LayerManagerPort {
                 updatedProperties.put(key, convertedValue);
             }
 
-            updatedProperties.put("date_modif", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+            LocalDateTime now = LocalDateTime.now();
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+            String formattedDate = now.atZone(ZoneId.systemDefault()).format(formatter);
+            updatedProperties.put("date_modif", formattedDate);
 
             log.info("Updated properties: {}", updatedProperties);
 
@@ -212,6 +218,57 @@ public class LayerManagerAdapter implements LayerManagerPort {
             return FeatureUpdateResult.builder()
                     .success(false)
                     .featureId(featureId)
+                    .message("Internal server error: " + e.getMessage())
+                    .build();
+        }
+    }
+
+    @Override
+    public FeatureUpdateResult deleteFeature(UUID layerId, String featureId) {
+        try {
+            log.info("Deleting feature {} from layer {}", featureId, layerId);
+
+            // 1. Récupérer le catalog de la couche
+            LayerCatalog layerCatalog = catalogRepository.findLayerCatalogById(layerId)
+                    .orElse(null);
+
+            if (layerCatalog == null) {
+                return FeatureUpdateResult.builder()
+                        .success(false)
+                        .message("Layer not found: " + layerId)
+                        .build();
+            }
+
+            // 2. Vérifier que le featureId n'est pas vide
+            if (featureId == null || featureId.trim().isEmpty()) {
+                return FeatureUpdateResult.builder()
+                        .success(false)
+                        .message("Feature ID is required")
+                        .build();
+            }
+
+            // 3. Exécuter la suppression via WFS-T
+            boolean deleted = cartographicServerPort.deleteFeature(layerCatalog, featureId);
+
+            if (deleted) {
+                log.info("Feature {} deleted successfully from layer {}", featureId, layerCatalog.name());
+                return FeatureUpdateResult.builder()
+                        .success(true)
+                        .featureId(featureId)
+                        .message("Feature deleted successfully")
+                        .build();
+            } else {
+                log.error("Failed to delete feature {} from layer {}", featureId, layerCatalog.name());
+                return FeatureUpdateResult.builder()
+                        .success(false)
+                        .message("WFS-T delete transaction failed or feature not found")
+                        .build();
+            }
+
+        } catch (Exception e) {
+            log.error("Error deleting feature {} from layer {}: {}", featureId, layerId, e.getMessage(), e);
+            return FeatureUpdateResult.builder()
+                    .success(false)
                     .message("Internal server error: " + e.getMessage())
                     .build();
         }
